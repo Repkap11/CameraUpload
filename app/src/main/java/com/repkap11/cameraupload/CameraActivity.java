@@ -3,8 +3,9 @@ package com.repkap11.cameraupload;
 import android.app.Activity;
 import android.hardware.Camera;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.support.v7.app.AppCompatActivity;
-import android.util.Base64;
 import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -13,8 +14,8 @@ import android.view.View;
 import android.widget.Button;
 
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLConnection;
 
 public class CameraActivity extends AppCompatActivity implements SurfaceHolder.Callback, View.OnClickListener {
 
@@ -23,6 +24,8 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     private SurfaceHolder mHolder;
     private Camera mCamera;
     private Button mTakePictureButton;
+    private HandlerThread mBackgroundThread;
+    private Handler mBackgroundHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -31,8 +34,23 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
         mCameraSurfaceView = (SurfaceView) findViewById(R.id.camera_stream);
         mTakePictureButton = (Button) findViewById(R.id.take_picture);
         mTakePictureButton.setOnClickListener(this);
+        mBackgroundThread = new HandlerThread("Background Handler");
+        mBackgroundThread.start();
+        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+    }
 
-
+    private void stopBackgroundThread() {
+        if (mBackgroundThread == null) {
+            return;
+        }
+        mBackgroundThread.quitSafely();
+        try {
+            mBackgroundThread.join();
+            mBackgroundThread = null;
+            mBackgroundHandler = null;
+        } catch (InterruptedException e) {
+            Log.v(TAG, "stopBackgroundThread");
+        }
     }
 
     @Override
@@ -186,25 +204,48 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
                 }
             }, null, new Camera.PictureCallback() {
                 @Override
-                public void onPictureTaken(byte[] data, Camera camera) {
-                    uploadBytes(data);
+                public void onPictureTaken(final byte[] data, Camera camera) {
+                    mCamera.startPreview();
+                    mBackgroundHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            uploadBytes(data);
+                        }
+                    });
+
                 }
             });
         }
     }
 
     private void uploadBytes(byte[] data) {
+        Log.e(TAG, "Starting upload");
         try {
-            URLConnection c = new URL(url).openConnection();
-            String username = "guest";
-            String password = "guest";
-            String userPassword = username + ":" + password;
-            String encoding = Base64.encodeToString(userPassword.getBytes(), Base64.DEFAULT);
-            c.setRequestProperty("Authorization", "Basic " + encoding);
-            c.setUseCaches(false);
-            c.getOutputStream().write(data);
+            String url = "http://repkam09.com:3000/dl/upload";
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            //String username = "guest";
+            //String password = "guest";
+            //String userPassword = username + ":" + password;
+            //String encoding = Base64.encodeToString(userPassword.getBytes(), Base64.DEFAULT);
+            //c.setRequestProperty("Authorization", "Basic " + encoding);
+            conn.setDoOutput(true);
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            conn.setRequestProperty("charset", "utf-8");
+            conn.setRequestProperty("Content-Length", Integer.toString(data.length));
+            conn.setRequestMethod("POST");
+            conn.getOutputStream().write(data);
+            int code = conn.getResponseCode();
+            String message = conn.getResponseMessage();
+            Log.e(TAG, "Code:"+code+" Message:"+message);
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopBackgroundThread();
+        super.onDestroy();
     }
 }
